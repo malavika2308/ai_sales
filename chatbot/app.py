@@ -1,11 +1,8 @@
 import os
-import time
-import requests
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
-from openai import OpenAI
 
 load_dotenv()
 app = Flask(__name__)
@@ -16,11 +13,9 @@ twilio_number = os.getenv("TWILIO_NUMBER")
 target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
-# OpenAI setup
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# Conversation log file
+# Conversation log
 CONVERSATION_LOG = "conversation_log.txt"
+TRANSCRIPT_FILE = "latest_transcript.txt"
 
 def append_to_log(speaker, text):
     with open(CONVERSATION_LOG, "a") as f:
@@ -32,9 +27,8 @@ def index():
 
 @app.route("/make_call", methods=["POST"])
 def make_call():
-    # Clear previous conversation
     open(CONVERSATION_LOG, "w").close()
-
+    open(TRANSCRIPT_FILE, "w").close()
     call = twilio_client.calls.create(
         to=target_number,
         from_=twilio_number,
@@ -42,86 +36,61 @@ def make_call():
     )
     return jsonify({"status": "calling", "sid": call.sid})
 
-@app.route("/voice", methods=["GET", "POST"])
+@app.route("/voice", methods=["POST"])
 def voice():
-    if request.method == "GET":
-        return "This route expects a POST from Twilio.", 405
-
     response = VoiceResponse()
     response.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
     response.record(
-        action="/handle_recording",
+        action="/process_recording",
+        transcribe=True,
+        transcribe_callback="/transcription",
         max_length=10,
         play_beep=True
     )
     return str(response)
 
-@app.route("/handle_recording", methods=["POST"])
-def handle_recording():
-    print("=== handle_recording START ===")
+@app.route("/transcription", methods=["POST"])
+def transcription():
+    transcript = request.form.get("TranscriptionText", "")
+    print("[TRANSCRIPTION RECEIVED]:", transcript)
+    append_to_log("User", transcript)
+    with open(TRANSCRIPT_FILE, "w") as f:
+        f.write(transcript)
+    return "", 204
 
-    recording_url = request.form.get("RecordingUrl")
-    print("[Step 1] Recording URL received:", recording_url)
-
-    # Use the URL as-is (DO NOT append .wav)
-    audio_url = recording_url
-    print("[Step 2] Downloading audio from:", audio_url)
-
-    # Delay to allow Twilio to finalize the recording
-    time.sleep(1)
-
-    response = requests.get(
-        audio_url,
-        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-    )
-    if response.status_code != 200:
-        print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}, Reason: {response.text}")
-        return "Failed to download audio", 500
-
-    # Save audio to file
-    audio_file_path = "user_input.wav"
-    with open(audio_file_path, "wb") as f:
-        f.write(response.content)
-
-    print("[Step 3] Audio downloaded successfully.")
-
-    # Transcribe with Whisper
+@app.route("/process_recording", methods=["POST"])
+def process_recording():
     try:
-        with open(audio_file_path, "rb") as audio_file:
-            transcript_response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file
+        with open(TRANSCRIPT_FILE, "r") as f:
+            user_text = f.read().strip()
+    except FileNotFoundError:
+        user_text = ""
+
+    if not user_text:
+        ai_reply = "Sorry, I couldn't understand that. Could you repeat?"
+    else:
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        try:
+            gpt_response = openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
+                    {"role": "user", "content": user_text}
+                ]
             )
-        user_text = transcript_response.text.strip()
-    except Exception as e:
-        print("[Step 4] Whisper API error:", e)
-        return "Transcription failed", 500
-
-    print("[Step 4] Transcription:", user_text)
-    append_to_log("User", user_text)
-
-    # Get GPT-4 response
-    try:
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
-                {"role": "user", "content": user_text}
-            ]
-        )
-        ai_reply = gpt_response.choices[0].message.content.strip()
-    except Exception as e:
-        print("[Step 5] GPT-4 API error:", e)
-        return "AI response failed", 500
+            ai_reply = gpt_response.choices[0].message.content.strip()
+        except Exception as e:
+            print("[GPT ERROR]", e)
+            ai_reply = "Sorry, something went wrong on my end."
 
     append_to_log("AI4Bazaar", ai_reply)
-    print("[Step 5] AI reply:", ai_reply)
-
-    # Respond back to caller
     response = VoiceResponse()
     response.say(ai_reply, voice="Polly.Joanna")
     response.record(
-        action="/handle_recording",
+        action="/process_recording",
+        transcribe=True,
+        transcribe_callback="/transcription",
         max_length=10,
         play_beep=True
     )
