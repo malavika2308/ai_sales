@@ -57,36 +57,43 @@ def voice():
 
 @app.route("/handle_recording", methods=["POST"])
 def handle_recording():
-    recording_url = request.form.get("RecordingUrl")
-    if not recording_url:
-        return "No recording URL received.", 400
-
-    audio_url = f"{recording_url}.wav"
-    audio_file_path = "user_input.wav"
-
-    # Download the user's voice recording
     try:
-        audio_data = requests.get(audio_url).content
+        print("\n=== handle_recording START ===")
+
+        # Step 1: Check incoming Twilio request
+        print("[Step 1] Incoming form data:", request.form)
+        recording_url = request.form.get("RecordingUrl")
+        if not recording_url:
+            print("❌ ERROR: RecordingUrl missing in form data.")
+            return "Missing RecordingUrl", 400
+
+        audio_url = f"{recording_url}.wav"
+        print(f"[Step 2] Downloading audio from: {audio_url}")
+
+        # Step 2: Download audio
+        response = requests.get(audio_url)
+        if response.status_code != 200:
+            print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}")
+            return "Failed to download audio", 500
+
+        audio_file_path = "user_input.wav"
         with open(audio_file_path, "wb") as f:
-            f.write(audio_data)
-    except Exception as e:
-        return f"Error downloading audio: {str(e)}", 500
+            f.write(response.content)
+        print("[Step 2] Audio file saved successfully.")
 
-    # Transcribe with Whisper
-    try:
+        # Step 3: Transcribe with Whisper
+        print("[Step 3] Sending audio to Whisper...")
         with open(audio_file_path, "rb") as audio_file:
             transcript_response = openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file
             )
         user_text = transcript_response.text.strip()
+        print(f"[Step 3] Transcription result: {user_text}")
         append_to_log("User", user_text)
-        print("User said:", user_text)
-    except Exception as e:
-        return f"Transcription error: {str(e)}", 500
 
-    # Generate GPT-4 reply
-    try:
+        # Step 4: GPT response
+        print("[Step 4] Sending user text to GPT-4...")
         gpt_response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
@@ -95,22 +102,25 @@ def handle_recording():
             ]
         )
         ai_reply = gpt_response.choices[0].message.content.strip()
+        print(f"[Step 4] GPT-4 reply: {ai_reply}")
         append_to_log("AI4Bazaar", ai_reply)
-        print("AI reply:", ai_reply)
+
+        # Step 5: Respond via Twilio voice
+        print("[Step 5] Sending response to Twilio...")
+        response = VoiceResponse()
+        response.say(ai_reply, voice="Polly.Joanna")
+        response.record(
+            action="/handle_recording",
+            max_length=10,
+            play_beep=True
+        )
+
+        print("=== handle_recording SUCCESS ===\n")
+        return str(response)
+
     except Exception as e:
-        return f"GPT-4 error: {str(e)}", 500
-
-    # Respond with AI voice
-    response = VoiceResponse()
-    response.say(ai_reply, voice="Polly.Joanna")
-
-    # Loop back for next input
-    response.record(
-        action="/handle_recording",
-        max_length=10,
-        play_beep=True
-    )
-    return str(response)
+        print("❌ Exception in /handle_recording:", str(e))
+        return f"Internal Server Error: {str(e)}", 500
 
 @app.route("/conversation", methods=["GET"])
 def conversation():
