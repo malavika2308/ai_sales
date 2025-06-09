@@ -57,71 +57,62 @@ def voice():
 
 @app.route("/handle_recording", methods=["POST"])
 def handle_recording():
-    try:
-        print("\n=== handle_recording START ===")
+    print("=== handle_recording START ===")
 
-        # Step 1: Check incoming Twilio request
-        print("[Step 1] Incoming form data:", request.form)
-        recording_url = request.form.get("RecordingUrl")
-        if not recording_url:
-            print("❌ ERROR: RecordingUrl missing in form data.")
-            return "Missing RecordingUrl", 400
+    recording_url = request.form.get("RecordingUrl")
+    print("[Step 1] Recording URL received:", recording_url)
 
-        audio_url = f"{recording_url}.wav"
-        print(f"[Step 2] Downloading audio from: {audio_url}")
+    # Use the URL as-is (DO NOT append .wav)
+    audio_url = recording_url
+    print("[Step 2] Downloading audio from:", audio_url)
 
-        # Step 2: Download audio
-        response = requests.get(audio_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
-        if response.status_code != 200:
-            print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}, Reason: {response.text}")
-            return "Failed to download audio", 500
+    response = requests.get(
+        audio_url,
+        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+    )
+    if response.status_code != 200:
+        print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}, Reason: {response.text}")
+        return "Failed to download audio", 500
 
+    # Save audio to file
+    audio_file_path = "user_input.wav"
+    with open(audio_file_path, "wb") as f:
+        f.write(response.content)
 
-        audio_file_path = "user_input.wav"
-        with open(audio_file_path, "wb") as f:
-            f.write(response.content)
-        print("[Step 2] Audio file saved successfully.")
+    print("[Step 3] Audio downloaded successfully.")
 
-        # Step 3: Transcribe with Whisper
-        print("[Step 3] Sending audio to Whisper...")
-        with open(audio_file_path, "rb") as audio_file:
-            transcript_response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file
-            )
-        user_text = transcript_response.text.strip()
-        print(f"[Step 3] Transcription result: {user_text}")
-        append_to_log("User", user_text)
-
-        # Step 4: GPT response
-        print("[Step 4] Sending user text to GPT-4...")
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
-                {"role": "user", "content": user_text}
-            ]
+    # Transcribe with Whisper
+    with open(audio_file_path, "rb") as audio_file:
+        transcript_response = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
         )
-        ai_reply = gpt_response.choices[0].message.content.strip()
-        print(f"[Step 4] GPT-4 reply: {ai_reply}")
-        append_to_log("AI4Bazaar", ai_reply)
+    user_text = transcript_response.text.strip()
+    print("[Step 4] Transcription:", user_text)
 
-        # Step 5: Respond via Twilio voice
-        print("[Step 5] Sending response to Twilio...")
-        response = VoiceResponse()
-        response.say(ai_reply, voice="Polly.Joanna")
-        response.record(
-            action="/handle_recording",
-            max_length=10,
-            play_beep=True
-        )
+    append_to_log("User", user_text)
 
-        print("=== handle_recording SUCCESS ===\n")
-        return str(response)
+    # Get GPT-4 response
+    gpt_response = openai_client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
+            {"role": "user", "content": user_text}
+        ]
+    )
+    ai_reply = gpt_response.choices[0].message.content.strip()
+    append_to_log("AI4Bazaar", ai_reply)
+    print("[Step 5] AI reply:", ai_reply)
 
-    except Exception as e:
-        print("❌ Exception in /handle_recording:", str(e))
-        return f"Internal Server Error: {str(e)}", 500
+    # Respond back to caller
+    response = VoiceResponse()
+    response.say(ai_reply, voice="Polly.Joanna")
+    response.record(
+        action="/handle_recording",
+        max_length=10,
+        play_beep=True
+    )
+    return str(response)
 
 @app.route("/conversation", methods=["GET"])
 def conversation():
