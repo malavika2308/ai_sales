@@ -71,10 +71,11 @@ def handle_recording():
         print(f"[Step 2] Downloading audio from: {audio_url}")
 
         # Step 2: Download audio
-        response = requests.get(audio_url)
+        response = requests.get(audio_url, auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")))
         if response.status_code != 200:
-            print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}")
+            print(f"❌ ERROR: Failed to download audio. Status: {response.status_code}, Reason: {response.text}")
             return "Failed to download audio", 500
+
 
         audio_file_path = "user_input.wav"
         with open(audio_file_path, "wb") as f:
