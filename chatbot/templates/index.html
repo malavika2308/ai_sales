@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI4Bazaar - Sales Caller</title>
+</head>
+<body>
+    <h1>AI4Bazaar Sales Caller</h1>
+    <button onclick="startCall()">Start Call</button>
+    <script>
+        function startCall() {
+            fetch("/make_call", { method: "POST" })
+                .then(res => res.json())
+                .then(data => alert("Call started: " + data.sid));
+        }
+    </script>
+</body>
+</html>

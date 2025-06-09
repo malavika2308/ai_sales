@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI4Bazaar - Sales Assistant</title>
+</head>
+<body>
+    <h1>AI4Bazaar Sales Assistant</h1>
+    <p>Click the button to start an outbound sales call:</p>
+    <button onclick="startCall()">Start Call</button>
+    <p><a href="/conversation" target="_blank">View Live Conversation Log</a></p>
+
+    <script>
+        function startCall() {
+            fetch("/make_call", { method: "POST" })
+                .then(res => res.json())
+                .then(data => alert("Call started! SID: " + data.sid))
+                .catch(err => alert("Error: " + err));
+        }
+    </script>
+</body>
+</html>
