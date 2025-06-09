@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
@@ -66,6 +67,9 @@ def handle_recording():
     audio_url = recording_url
     print("[Step 2] Downloading audio from:", audio_url)
 
+    # Delay to allow Twilio to finalize the recording
+    time.sleep(1)
+
     response = requests.get(
         audio_url,
         auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
@@ -82,25 +86,34 @@ def handle_recording():
     print("[Step 3] Audio downloaded successfully.")
 
     # Transcribe with Whisper
-    with open(audio_file_path, "rb") as audio_file:
-        transcript_response = openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file
-        )
-    user_text = transcript_response.text.strip()
-    print("[Step 4] Transcription:", user_text)
+    try:
+        with open(audio_file_path, "rb") as audio_file:
+            transcript_response = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            )
+        user_text = transcript_response.text.strip()
+    except Exception as e:
+        print("[Step 4] Whisper API error:", e)
+        return "Transcription failed", 500
 
+    print("[Step 4] Transcription:", user_text)
     append_to_log("User", user_text)
 
     # Get GPT-4 response
-    gpt_response = openai_client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
-            {"role": "user", "content": user_text}
-        ]
-    )
-    ai_reply = gpt_response.choices[0].message.content.strip()
+    try:
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are AI4Bazaar, an AI that sells custom websites."},
+                {"role": "user", "content": user_text}
+            ]
+        )
+        ai_reply = gpt_response.choices[0].message.content.strip()
+    except Exception as e:
+        print("[Step 5] GPT-4 API error:", e)
+        return "AI response failed", 500
+
     append_to_log("AI4Bazaar", ai_reply)
     print("[Step 5] AI reply:", ai_reply)
 
