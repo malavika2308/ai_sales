@@ -2,7 +2,7 @@ import os
 import time
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse, Pause
 from dotenv import load_dotenv
 from openai import OpenAI
 import smtplib
@@ -27,7 +27,7 @@ def append_to_log(speaker, text):
     with open(LOG_PATH, "a") as f:
         f.write(f"{speaker}: {text}\n")
 
-def send_email_with_conversation():
+def send_email_with_conversation(judgment="Unknown"):
     try:
         with open(LOG_PATH, "r") as f:
             conversation_text = f.read()
@@ -35,10 +35,10 @@ def send_email_with_conversation():
         conversation_text = "No conversation found."
 
     msg = EmailMessage()
-    msg["Subject"] = "AI4Bazaar Call Transcript"
+    msg["Subject"] = "AI4Bazaar Call Transcript & Judgment"
     msg["From"] = os.getenv("EMAIL_USER")
     msg["To"] = os.getenv("EMAIL_RECEIVER")
-    msg.set_content("Please find the attached call conversation.")
+    msg.set_content(f"Call Judgment: {judgment}\n\nTranscript attached.")
     msg.add_attachment(conversation_text, filename="conversation_log.txt")
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
@@ -69,14 +69,10 @@ def voice():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="30",
+        speechTimeout="auto",
         bargeIn=True
     )
     gather.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
-
-    response.pause(length=1)
-    response.say("It seems you're away. Goodbye!", voice="Polly.Joanna")
-    response.hangup()
     return str(response)
 
 @app.route("/process_recording", methods=["POST"])
@@ -92,7 +88,7 @@ def process_recording():
             gpt_response = openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI assistant that sells websites. Convince the client to buy one by explaining its benefits, using a bit of sarcasm, cracking a joke, and being persuasive. Keep replies very short and clear, 1–2 sentences only."},
+                    {"role": "system", "content": "You are AI4Bazaar, a witty AI sales assistant. Your goal is to sell websites to small business owners. Use humor, make the value clear, and sound like a clever friend. Keep replies short and persuasive."},
                     {"role": "user", "content": user_text}
                 ],
                 max_tokens=100
@@ -100,7 +96,7 @@ def process_recording():
             ai_reply = gpt_response.choices[0].message.content.strip()
         except Exception as e:
             print("[GPT ERROR]", e)
-            ai_reply = "Sorry, something went wrong."
+            ai_reply = "Oops! Something glitched. Mind saying that again?"
 
         append_to_log("AI4Bazaar", ai_reply)
 
@@ -108,20 +104,19 @@ def process_recording():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="30",
+        speechTimeout="5",
         bargeIn=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
 
-    response.pause(length=1)
-    response.say("It seems you're away. Goodbye!", voice="Polly.Joanna")
+    # Add polite goodbye if no response within 30 seconds
+    response.pause(length=30)
+    response.say("Looks like you're busy. Feel free to call us anytime. Goodbye!", voice="Polly.Joanna")
     response.hangup()
     return str(response)
 
 @app.route("/end_call", methods=["POST"])
 def end_call():
-    send_email_with_conversation()
-
     try:
         with open(LOG_PATH, "r") as f:
             convo = f.read()
@@ -141,6 +136,7 @@ def end_call():
         print("[GPT Judgment Error]", e)
         judgment = "Unknown"
 
+    send_email_with_conversation(judgment)
     return jsonify({"status": "Conversation emailed", "outcome": judgment})
 
 @app.route("/conversation", methods=["GET"])
