@@ -14,15 +14,21 @@ twilio_number = os.getenv("TWILIO_NUMBER")
 target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
-# Conversation log
+# Files for storing conversation
 CONVERSATION_LOG = "conversation_log.txt"
 TRANSCRIPT_FILE = "latest_transcript.txt"
 
+# OpenAI setup
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Logging function
 def append_to_log(speaker, text):
-    with open(CONVERSATION_LOG, "a") as f:
-        f.write(f"{speaker}: {text}\n")
+    try:
+        with open(CONVERSATION_LOG, "a") as f:
+            f.write(f"{speaker}: {text}\n")
+        print(f"[LOGGED] {speaker}: {text}")
+    except Exception as e:
+        print("[LOGGING ERROR]", e)
 
 @app.route("/")
 def index():
@@ -45,8 +51,8 @@ def voice():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="auto",
-        bargeIn=True
+        speech_timeout="auto",
+        barge_in=True
     )
     gather.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
     return str(response)
@@ -54,6 +60,7 @@ def voice():
 @app.route("/process_recording", methods=["POST"])
 def process_recording():
     user_text = request.form.get("SpeechResult", "").strip()
+    print("[USER INPUT]:", user_text)
 
     if not user_text:
         ai_reply = "Sorry, I couldn't understand that. Could you repeat?"
@@ -64,24 +71,29 @@ def process_recording():
             gpt_response = openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI assistant that sells websites. Keep replies very short and clear, 1-2 sentences only."},
+                    {
+                        "role": "system",
+                        "content": "You are AI4Bazaar, a friendly AI that sells websites. Keep your answers short, clear, and conversational. Never more than 2 sentences."
+                    },
                     {"role": "user", "content": user_text}
                 ],
-                max_tokens=100
+                max_tokens=100,
+                temperature=0.7
             )
             ai_reply = gpt_response.choices[0].message.content.strip()
         except Exception as e:
             print("[GPT ERROR]", e)
-            ai_reply = "Sorry, something went wrong."
+            ai_reply = "Sorry, something went wrong on my end."
 
         append_to_log("AI4Bazaar", ai_reply)
 
+    # Respond and ask for next input
     response = VoiceResponse()
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="auto",
-        bargeIn=True
+        speech_timeout="auto",
+        barge_in=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
     return str(response)
