@@ -4,25 +4,45 @@ from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
 from openai import OpenAI
+import smtplib
+from email.message import EmailMessage
 
 load_dotenv()
 app = Flask(__name__)
 
+# Twilio setup
 twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 twilio_number = os.getenv("TWILIO_NUMBER")
 target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
-# File paths
-CONVERSATION_LOG = "conversation_log.txt"
+# Conversation log
+LOG_PATH = "conversation_log.txt"
 TRANSCRIPT_FILE = "latest_transcript.txt"
-RESULT_FILE = "call_result.txt"
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def append_to_log(speaker, text):
-    with open(CONVERSATION_LOG, "a") as f:
+    with open(LOG_PATH, "a") as f:
         f.write(f"{speaker}: {text}\n")
+
+def send_email_with_conversation():
+    try:
+        with open(LOG_PATH, "r") as f:
+            conversation_text = f.read()
+    except FileNotFoundError:
+        conversation_text = "No conversation found."
+
+    msg = EmailMessage()
+    msg["Subject"] = "AI4Bazaar Call Transcript"
+    msg["From"] = os.getenv("EMAIL_USER")
+    msg["To"] = os.getenv("EMAIL_RECEIVER")
+    msg.set_content("Please find the attached call conversation.")
+    msg.add_attachment(conversation_text, filename="conversation_log.txt")
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+        smtp.send_message(msg)
 
 @app.route("/")
 def index():
@@ -30,7 +50,7 @@ def index():
 
 @app.route("/make_call", methods=["POST"])
 def make_call():
-    open(CONVERSATION_LOG, "w").close()
+    open(LOG_PATH, "w").close()
     open(TRANSCRIPT_FILE, "w").close()
     call = twilio_client.calls.create(
         to=target_number,
@@ -80,7 +100,7 @@ def process_recording():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="5",  # Extended to 5 seconds pause
+        speechTimeout="auto",
         bargeIn=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
@@ -88,39 +108,33 @@ def process_recording():
 
 @app.route("/end_call", methods=["POST"])
 def end_call():
-    # Send full conversation to GPT and ask if it was a successful/positive call
+    send_email_with_conversation()
+
     try:
-        with open(CONVERSATION_LOG, "r") as f:
-            conversation = f.read()
+        with open(LOG_PATH, "r") as f:
+            convo = f.read()
+    except FileNotFoundError:
+        convo = ""
 
-        result_prompt = (
-            "Below is a sales conversation. Your job is to analyze if the customer showed a positive interest "
-            "in the offer. Just reply with 'Positive' or 'Negative'.\n\n"
-            f"{conversation}"
-        )
-
+    try:
         result = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are an evaluator who judges customer interest in sales calls."},
-                {"role": "user", "content": result_prompt}
-            ],
-            max_tokens=10
+                {"role": "system", "content": "You are an assistant. Given this sales call transcript, respond only with 'Positive' or 'Negative' based on whether the user seemed interested."},
+                {"role": "user", "content": convo}
+            ]
         )
-
-        decision = result.choices[0].message.content.strip()
-        with open(RESULT_FILE, "w") as f:
-            f.write(f"Call result: {decision}")
-
-        return jsonify({"result": decision})
+        judgment = result.choices[0].message.content.strip()
     except Exception as e:
-        print("[FINAL EVAL ERROR]", e)
-        return jsonify({"result": "Error"}), 500
+        print("[GPT Judgment Error]", e)
+        judgment = "Unknown"
+
+    return jsonify({"status": "Conversation emailed", "outcome": judgment})
 
 @app.route("/conversation", methods=["GET"])
 def conversation():
     try:
-        with open(CONVERSATION_LOG, "r") as f:
+        with open(LOG_PATH, "r") as f:
             lines = f.readlines()
     except FileNotFoundError:
         lines = ["No conversation yet."]
