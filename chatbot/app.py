@@ -1,4 +1,5 @@
 import os
+import time
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
@@ -55,7 +56,10 @@ def make_call():
     call = twilio_client.calls.create(
         to=target_number,
         from_=twilio_number,
-        url=f"{base_url}/voice"
+        url=f"{base_url}/voice",
+        status_callback=f"{base_url}/end_call",
+        status_callback_event=["completed"],
+        status_callback_method="POST"
     )
     return jsonify({"status": "calling", "sid": call.sid})
 
@@ -65,10 +69,14 @@ def voice():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="auto",
+        speechTimeout="30",
         bargeIn=True
     )
     gather.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
+
+    response.pause(length=1)
+    response.say("It seems you're away. Goodbye!", voice="Polly.Joanna")
+    response.hangup()
     return str(response)
 
 @app.route("/process_recording", methods=["POST"])
@@ -84,7 +92,7 @@ def process_recording():
             gpt_response = openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI assistant that sells websites. Keep replies very short and clear, 1-2 sentences only."},
+                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI assistant that sells websites. Convince the client to buy one by explaining its benefits, using a bit of sarcasm, cracking a joke, and being persuasive. Keep replies very short and clear, 1–2 sentences only."},
                     {"role": "user", "content": user_text}
                 ],
                 max_tokens=100
@@ -100,10 +108,14 @@ def process_recording():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="auto",
+        speechTimeout="30",
         bargeIn=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
+
+    response.pause(length=1)
+    response.say("It seems you're away. Goodbye!", voice="Polly.Joanna")
+    response.hangup()
     return str(response)
 
 @app.route("/end_call", methods=["POST"])
