@@ -1,6 +1,4 @@
 import os
-import json
-from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
@@ -16,30 +14,15 @@ twilio_number = os.getenv("TWILIO_NUMBER")
 target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
-# Files
+# Conversation log
+CONVERSATION_LOG = "conversation_log.txt"
 TRANSCRIPT_FILE = "latest_transcript.txt"
-JSON_LOG_FILE = "conversation_log.json"
 
-# OpenAI
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Append to JSON log with timestamp
 def append_to_log(speaker, text):
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "speaker": speaker,
-        "text": text
-    }
-
-    if not os.path.exists(JSON_LOG_FILE):
-        with open(JSON_LOG_FILE, "w") as f:
-            json.dump([], f)
-
-    with open(JSON_LOG_FILE, "r+", encoding="utf-8") as f:
-        data = json.load(f)
-        data.append(log_entry)
-        f.seek(0)
-        json.dump(data, f, indent=2)
+    with open(CONVERSATION_LOG, "a") as f:
+        f.write(f"{speaker}: {text}\n")
 
 @app.route("/")
 def index():
@@ -47,10 +30,8 @@ def index():
 
 @app.route("/make_call", methods=["POST"])
 def make_call():
-    # Clear logs at start of each call
+    open(CONVERSATION_LOG, "w").close()
     open(TRANSCRIPT_FILE, "w").close()
-    open(JSON_LOG_FILE, "w").write("[]")
-
     call = twilio_client.calls.create(
         to=target_number,
         from_=twilio_number,
@@ -61,7 +42,6 @@ def make_call():
 @app.route("/voice", methods=["POST"])
 def voice():
     response = VoiceResponse()
-    response.pause(length=0.5)
     gather = response.gather(
         input="speech",
         action="/process_recording",
@@ -71,32 +51,20 @@ def voice():
     gather.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
     return str(response)
 
-@app.route("/transcription", methods=["POST"])
-def transcription():
-    transcript = request.form.get("TranscriptionText", "")
-    print("[TRANSCRIPTION RECEIVED]:", transcript)
-    append_to_log("User", transcript)
-    with open(TRANSCRIPT_FILE, "w", encoding="utf-8") as f:
-        f.write(transcript)
-    return "", 204
-
 @app.route("/process_recording", methods=["POST"])
 def process_recording():
-    try:
-        with open(TRANSCRIPT_FILE, "r", encoding="utf-8") as f:
-            user_text = f.read().strip()
-    except FileNotFoundError:
-        user_text = ""
+    user_text = request.form.get("SpeechResult", "").strip()
 
     if not user_text:
         ai_reply = "Sorry, I couldn't understand that. Could you repeat?"
+        append_to_log("AI4Bazaar", ai_reply)
     else:
         append_to_log("User", user_text)
         try:
             gpt_response = openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI sales assistant. Keep responses short and clear, under two sentences."},
+                    {"role": "system", "content": "You are AI4Bazaar, a friendly AI assistant that sells websites. Keep replies very short and clear, 1-2 sentences only."},
                     {"role": "user", "content": user_text}
                 ],
                 max_tokens=100
@@ -104,13 +72,11 @@ def process_recording():
             ai_reply = gpt_response.choices[0].message.content.strip()
         except Exception as e:
             print("[GPT ERROR]", e)
-            ai_reply = "Something went wrong. Please try again later."
+            ai_reply = "Sorry, something went wrong."
 
         append_to_log("AI4Bazaar", ai_reply)
 
-    # Create Twilio response with interruption support
     response = VoiceResponse()
-    response.pause(length=0.5)
     gather = response.gather(
         input="speech",
         action="/process_recording",
@@ -118,18 +84,16 @@ def process_recording():
         bargeIn=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
-
     return str(response)
 
 @app.route("/conversation", methods=["GET"])
 def conversation():
     try:
-        with open(JSON_LOG_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        with open(CONVERSATION_LOG, "r") as f:
+            lines = f.readlines()
     except FileNotFoundError:
-        data = []
-
-    return render_template("conversation.html", lines=[f"{entry['speaker']}: {entry['text']}" for entry in data])
+        lines = ["No conversation yet."]
+    return render_template("conversation.html", lines=lines)
 
 @app.route("/health")
 def health():
