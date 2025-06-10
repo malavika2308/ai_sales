@@ -51,7 +51,7 @@ def voice():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speech_timeout="auto",
+        speech_timeout="30",
         barge_in=True
     )
     gather.say("Hi! This is AI4Bazaar. Are you interested in a custom website for your business?", voice="Polly.Joanna")
