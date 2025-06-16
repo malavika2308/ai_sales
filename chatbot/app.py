@@ -1,8 +1,9 @@
 import os
 import time
+import threading
 from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse, Pause
+from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
 from openai import OpenAI
 import smtplib
@@ -17,16 +18,19 @@ twilio_number = os.getenv("TWILIO_NUMBER")
 target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
-# Conversation log
+# OpenAI setup
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Files
 LOG_PATH = "conversation_log.txt"
 TRANSCRIPT_FILE = "latest_transcript.txt"
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
+# Log conversation
 def append_to_log(speaker, text):
     with open(LOG_PATH, "a") as f:
         f.write(f"{speaker}: {text}\n")
 
+# Send email
 def send_email_with_conversation(judgment="Unknown"):
     try:
         with open(LOG_PATH, "r") as f:
@@ -41,9 +45,12 @@ def send_email_with_conversation(judgment="Unknown"):
     msg.set_content(f"Call Judgment: {judgment}\n\nTranscript attached.")
     msg.add_attachment(conversation_text, filename="conversation_log.txt")
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+            smtp.send_message(msg)
+    except Exception as e:
+        print("[Email Error]", e)
 
 @app.route("/")
 def index():
@@ -86,7 +93,7 @@ def process_recording():
         append_to_log("User", user_text)
         try:
             gpt_response = openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-3.5-turbo",  # Use gpt-4 if needed, just slower
                 messages=[
                     {"role": "system", "content": "You are AI4Bazaar, a witty AI sales assistant. Your goal is to sell websites to small business owners. Use humor, make the value clear, and sound like a clever friend. Keep replies short and persuasive."},
                     {"role": "user", "content": user_text}
@@ -109,7 +116,6 @@ def process_recording():
     )
     gather.say(ai_reply, voice="Polly.Joanna")
 
-    # Add polite goodbye if no response within 30 seconds
     response.pause(length=30)
     response.say("Looks like you're busy. Feel free to call us anytime. Goodbye!", voice="Polly.Joanna")
     response.hangup()
@@ -117,27 +123,32 @@ def process_recording():
 
 @app.route("/end_call", methods=["POST"])
 def end_call():
-    try:
-        with open(LOG_PATH, "r") as f:
-            convo = f.read()
-    except FileNotFoundError:
-        convo = ""
+    def handle_judgment_and_email():
+        try:
+            with open(LOG_PATH, "r") as f:
+                convo = f.read()
+        except FileNotFoundError:
+            convo = ""
 
-    try:
-        result = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are an assistant. Given this sales call transcript, respond only with 'Positive' or 'Negative' based on whether the user seemed interested."},
-                {"role": "user", "content": convo}
-            ]
-        )
-        judgment = result.choices[0].message.content.strip()
-    except Exception as e:
-        print("[GPT Judgment Error]", e)
-        judgment = "Unknown"
+        try:
+            result = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an assistant. Given this sales call transcript, respond only with 'Positive' or 'Negative' based on whether the user seemed interested."},
+                    {"role": "user", "content": convo}
+                ]
+            )
+            judgment = result.choices[0].message.content.strip()
+        except Exception as e:
+            print("[GPT Judgment Error]", e)
+            judgment = "Unknown"
 
-    send_email_with_conversation(judgment)
-    return jsonify({"status": "Conversation emailed", "outcome": judgment})
+        send_email_with_conversation(judgment)
+
+    # Run in background to avoid slowing the response
+    threading.Thread(target=handle_judgment_and_email).start()
+
+    return jsonify({"status": "Conversation processing started"})
 
 @app.route("/conversation", methods=["GET"])
 def conversation():
