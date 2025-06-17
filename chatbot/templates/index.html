@@ -2,16 +2,83 @@
 <html>
 <head>
     <title>AI4Bazaar - Sales Caller</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 50px;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        input[type="text"] {
+            padding: 10px;
+            width: 250px;
+            margin: 20px auto;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #status {
+            margin-top: 20px;
+            color: green;
+        }
+    </style>
 </head>
 <body>
     <h1>AI4Bazaar Sales Caller</h1>
-    <button onclick="startCall()">Start Call</button>
+
+    <form id="callForm">
+        <input type="text" id="phoneNumber" placeholder="Enter number (e.g. +919876543210)" required />
+        <br>
+        <button type="submit">Start Call</button>
+    </form>
+
+    <div id="status"></div>
+
     <script>
-        function startCall() {
-            fetch("/make_call", { method: "POST" })
-                .then(res => res.json())
-                .then(data => alert("Call started: " + data.sid));
-        }
+        document.getElementById("callForm").addEventListener("submit", function(event) {
+            event.preventDefault();
+            const number = document.getElementById("phoneNumber").value.trim();
+
+            if (!number.startsWith("+") || number.length < 10) {
+                alert("Please enter a valid phone number with country code.");
+                return;
+            }
+
+            fetch("/make_call", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ number: number })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.sid) {
+                    document.getElementById("status").textContent = "📞 Call started! SID: " + data.sid;
+                } else {
+                    document.getElementById("status").textContent = "❌ Call could not be started.";
+                }
+            })
+            .catch(err => {
+                console.error("Call Error:", err);
+                document.getElementById("status").textContent = "🚨 Something went wrong!";
+            });
+        });
     </script>
 </body>
 </html>
