@@ -60,11 +60,12 @@
                 alert("Please enter a valid phone number with country code.");
                 return;
             }
+            
 
             fetch("/make_call", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ number: number })
+                body: JSON.stringify({ target_number: number })
             })
             .then(res => res.json())
             .then(data => {
