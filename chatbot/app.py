@@ -1,7 +1,7 @@
 import os
 import time
 import threading
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, redirect
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
@@ -25,13 +25,14 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 LOG_PATH = "conversation_log.txt"
 TRANSCRIPT_FILE = "latest_transcript.txt"
 
-# Log conversation
+# Log conversation with timestamp
 def append_to_log(speaker, text):
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     with open(LOG_PATH, "a") as f:
-        f.write(f"{speaker}: {text}\n")
+        f.write(f"[{timestamp}] {speaker}: {text}\n")
 
-# Send email
-def send_email_with_conversation(judgment="Unknown"):
+# Send email with formatted content
+def send_email_with_conversation(judgment="Unknown", summary="No summary available."):
     try:
         with open(LOG_PATH, "r") as f:
             conversation_text = f.read()
@@ -42,7 +43,21 @@ def send_email_with_conversation(judgment="Unknown"):
     msg["Subject"] = "AI4Bazaar Call Transcript & Judgment"
     msg["From"] = os.getenv("EMAIL_USER")
     msg["To"] = os.getenv("EMAIL_RECEIVER")
-    msg.set_content(f"Call Judgment: {judgment}\n\nTranscript attached.")
+    msg.set_content(f"""
+Hello,
+
+Here is the transcript and analysis of the recent AI sales call.
+
+📅 Judgment: {judgment}
+
+Summary:
+{summary}
+
+Please find the attached transcript for your review.
+
+Regards,
+AI4Bazaar Bot
+""")
     msg.add_attachment(conversation_text, filename="conversation_log.txt")
 
     try:
@@ -93,9 +108,9 @@ def process_recording():
         append_to_log("User", user_text)
         try:
             gpt_response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Use gpt-4 if needed, just slower
+                model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are AI4Bazaar, a witty AI sales assistant. Your goal is to sell websites to small business owners. Use humor, make the value clear, and sound like a clever friend. Keep replies short and persuasive."},
+                    {"role": "system", "content": "You are AI4Bazaar, a smart and friendly AI sales assistant. Your job is to sell websites to small business owners in a helpful, persuasive, and clear tone. Be confident but not pushy. Use everyday language, ask meaningful questions, and guide the user toward interest or booking a meeting."},
                     {"role": "user", "content": user_text}
                 ],
                 max_tokens=100
@@ -111,14 +126,11 @@ def process_recording():
     gather = response.gather(
         input="speech",
         action="/process_recording",
-        speechTimeout="5",
+        speechTimeout="auto",
         bargeIn=True
     )
     gather.say(ai_reply, voice="Polly.Joanna")
 
-    response.pause(length=30)
-    response.say("Looks like you're busy. Feel free to call us anytime. Goodbye!", voice="Polly.Joanna")
-    response.hangup()
     return str(response)
 
 @app.route("/end_call", methods=["POST"])
@@ -131,23 +143,34 @@ def end_call():
             convo = ""
 
         try:
-            result = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            judgment_response = openai_client.chat.completions.create(
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an assistant. Given this sales call transcript, respond only with 'Positive' or 'Negative' based on whether the user seemed interested."},
                     {"role": "user", "content": convo}
                 ]
             )
-            judgment = result.choices[0].message.content.strip()
+            judgment = judgment_response.choices[0].message.content.strip()
         except Exception as e:
             print("[GPT Judgment Error]", e)
             judgment = "Unknown"
 
-        send_email_with_conversation(judgment)
+        try:
+            summary_response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Summarize this sales call in 2-3 bullet points."},
+                    {"role": "user", "content": convo}
+                ]
+            )
+            summary = summary_response.choices[0].message.content.strip()
+        except Exception as e:
+            print("[GPT Summary Error]", e)
+            summary = "No summary available."
 
-    # Run in background to avoid slowing the response
+        send_email_with_conversation(judgment, summary)
+
     threading.Thread(target=handle_judgment_and_email).start()
-
     return jsonify({"status": "Conversation processing started"})
 
 @app.route("/conversation", methods=["GET"])
@@ -165,3 +188,4 @@ def health():
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
+
