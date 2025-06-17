@@ -1,7 +1,7 @@
 import os
 import time
 import threading
-from flask import Flask, request, jsonify, render_template, redirect
+from flask import Flask, request, jsonify, render_template
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
@@ -15,7 +15,6 @@ app = Flask(__name__)
 # Twilio setup
 twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 twilio_number = os.getenv("TWILIO_NUMBER")
-target_number = os.getenv("TARGET_PHONE_NUMBER")
 base_url = os.getenv("BASE_URL")
 
 # OpenAI setup
@@ -73,6 +72,10 @@ def index():
 
 @app.route("/make_call", methods=["POST"])
 def make_call():
+    target_number = request.form.get("target_number")
+    if not target_number or not target_number.startswith("+"):
+        return jsonify({"error": "Please enter a valid phone number with country code."}), 400
+
     open(LOG_PATH, "w").close()
     open(TRANSCRIPT_FILE, "w").close()
     call = twilio_client.calls.create(
@@ -83,6 +86,7 @@ def make_call():
         status_callback_event=["completed"],
         status_callback_method="POST"
     )
+    append_to_log("System", f"\ud83d\udcde Call initiated to {target_number} at {time.ctime()}")
     return jsonify({"status": "calling", "sid": call.sid})
 
 @app.route("/voice", methods=["POST"])
@@ -188,4 +192,3 @@ def health():
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
-
